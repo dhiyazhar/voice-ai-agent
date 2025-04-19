@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transkripsi Real-time dengan Whisper</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #3e8e41;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        button.stop {
+            background-color: #f44336;
+        }
+        button.stop:hover {
+            background-color: #d32f2f;
+        }
+        .status {
+            text-align: center;
+            margin: 10px 0;
+            padding: 5px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.disconnected {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        .status.recording {
+            background-color: #fff8e1;
+            color: #ff8f00;
+        }
+        #transcription {
+            white-space: pre-wrap;
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .settings {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .settings h3 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Transkripsi Real-time dengan Whisper</h1>
+    
+    <div id="statusIndicator" class="status disconnected">Belum terhubung ke server</div>
+    
+    <div class="controls">
+        <button id="startBtn" disabled>Mulai Rekam</button>
+        <button id="stopBtn" class="stop" disabled>Berhenti Rekam</button>
+        <button id="clearBtn">Bersihkan Transkrip</button>
+    </div>
+    
+    <div id="transcription">Transkrip akan muncul di sini...</div>
+    
+    <div class="settings">
+        <h3>Pengaturan</h3>
+        <div>
+            <label for="serverUrl">URL Server:</label>
+            <input type="text" id="serverUrl" value="ws://localhost:5000/ws" style="width: 300px;">
+        </div>
+        <div style="margin-top: 10px;">
+            <button id="connectBtn">Hubungkan ke Server</button>
+        </div>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const connectBtn = document.getElementById('connectBtn');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const transcriptionDiv = document.getElementById('transcription');
+        const serverUrlInput = document.getElementById('serverUrl');
+        
+        let webSocket;
+        let mediaRecorder;
+        let audioStream;
+        let isRecording = false;
+        
+        function connectToServer() {
+            const serverUrl = serverUrlInput.value;
+            
+            if (webSocket) {
+                webSocket.close();
+            }
+            
+            webSocket = new WebSocket(serverUrl);
+            
+            webSocket.onopen = () => {
+                console.log('WebSocket connection established');
+                statusIndicator.textContent = 'Terhubung ke server';
+                statusIndicator.className = 'status connected';
+                startBtn.disabled = false;
+                connectBtn.textContent = 'Terhubung Kembali';
+            };
+            
+            webSocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'connection_established') {
+                    console.log('Server acknowledged connection');
+                }
+                else if (data.type === 'transcription_update') {
+                    // Tambahkan hasil transkripsi ke div
+                    const transcription = data.transcription;
+                    if (transcription && transcription.trim() !== '') {
+                        const p = document.createElement('p');
+                        p.textContent = transcription;
+                        transcriptionDiv.appendChild(p);
+                        
+                        // Auto-scroll ke bawah
+                        transcriptionDiv.scrollTop = transcriptionDiv.scrollHeight;
+                    }
+                }
+                else if (data.type === 'error') {
+                    console.error('Server error:', data.message);
+                }
+            };
+            
+            webSocket.onclose = (event) => {
+                console.log('WebSocket connection closed', event);
+                statusIndicator.textContent = 'Terputus dari server';
+                statusIndicator.className = 'status disconnected';
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                connectBtn.textContent = 'Hubungkan ke Server';
+                
+                if (isRecording) {
+                    stopRecording();
+            }};
+            
+            webSocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                statusIndicator.textContent = 'Error koneksi ke server';
+                statusIndicator.className = 'status disconnected';
+            };
+        };
+        
+        async function startRecording() {
+            try {
+                // Minta izin akses mikrofon
+                audioStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: true, 
+                    video: false
+                });
+                
+                const audioCtx = new AudioContext({ 
+                    sampleRate: 16000
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm', 
+                });
+
+                // Update UI
+                isRecording = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusIndicator.textContent = 'Merekam...';
+                statusIndicator.className = 'status recording';
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0 && webSocket && webSocket.readyState === WebSocket.OPEN) {
+                        webSocket.send(event.data);
+                        console.log(event.data)
+                    }
+                };
+                
+                // Event handler saat perekaman berhenti
+                mediaRecorder.onstop = () => {
+                    audioStream.getTracks().forEach(track => track.stop());
+                    isRecording = false;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    statusIndicator.textContent = 'Terhubung ke server';
+                    statusIndicator.className = 'status connected';
+                };
+                
+                // Mulai perekaman dan kirim data setiap 1 detik
+                mediaRecorder.start(100);
+                
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                alert('Gagal memulai perekaman: ' + error.message);
+            }
+        }
+        
+        // Fungsi untuk menghentikan perekaman
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+            }
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        clearBtn.addEventListener('click', () => {
+            transcriptionDiv.innerHTML = 'Transkrip akan muncul di sini...';
+        });
+        connectBtn.addEventListener('click', connectToServer);
+        
+        // Coba koneksi otomatis saat halaman dimuat
+        // window.addEventListener('load', connectToServer);
+    </script>
+</body>
+</html>
